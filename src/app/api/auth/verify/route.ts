@@ -1,13 +1,25 @@
 import { NextRequest } from "next/server";
 import { parseSiweMessage, verifySiweMessage } from "viem/siwe";
+import { getClientIp, getExpectedHost, hostIsAllowed, jsonResponse } from "@/lib/http";
+import { rateLimit, rateLimitedResponse } from "@/lib/rate-limit";
 import { getSession } from "@/lib/session-server";
 import { publicClient } from "@/lib/viem-server";
 
 export async function POST(req: NextRequest) {
+  if (!hostIsAllowed(req)) {
+    return jsonResponse({ ok: false, error: "invalid host" }, { status: 400 });
+  }
+
+  const limited = rateLimit(`verify:${getClientIp(req)}`, {
+    limit: 10,
+    windowMs: 60_000,
+  });
+  if (!limited.ok) return rateLimitedResponse(limited.retryAfter);
+
   const session = await getSession();
 
   if (!session.nonce) {
-    return Response.json({ ok: false, error: "no nonce" }, { status: 422 });
+    return jsonResponse({ ok: false, error: "no nonce" }, { status: 422 });
   }
 
   let message: string;
@@ -15,11 +27,11 @@ export async function POST(req: NextRequest) {
   try {
     ({ message, signature } = await req.json());
   } catch {
-    return Response.json({ ok: false, error: "bad body" }, { status: 400 });
+    return jsonResponse({ ok: false, error: "bad body" }, { status: 400 });
   }
 
-  // The signed message's domain must match the host we're served from.
-  const domain = req.headers.get("host") ?? undefined;
+  // The signed message's domain must match the configured production host.
+  const domain = getExpectedHost(req);
 
   const valid = await verifySiweMessage(publicClient, {
     message,
@@ -29,7 +41,7 @@ export async function POST(req: NextRequest) {
   });
 
   if (!valid) {
-    return Response.json({ ok: false, error: "invalid signature" }, { status: 401 });
+    return jsonResponse({ ok: false, error: "invalid signature" }, { status: 401 });
   }
 
   const fields = parseSiweMessage(message);
@@ -38,5 +50,5 @@ export async function POST(req: NextRequest) {
   session.nonce = undefined; // burn the nonce
   await session.save();
 
-  return Response.json({ ok: true, address: fields.address });
+  return jsonResponse({ ok: true, address: fields.address });
 }

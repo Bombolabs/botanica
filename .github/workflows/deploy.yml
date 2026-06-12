@@ -1,0 +1,78 @@
+name: Verify and deploy
+
+on:
+  pull_request:
+    branches: ["main"]
+  push:
+    branches: ["main"]
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Verify
+    runs-on: ubuntu-latest
+    env:
+      APP_HOST: botanica.bombolabs.xyz
+      SESSION_PASSWORD: ci_session_password_replace_with_real_secret_32_chars
+      NEXT_PUBLIC_WC_PROJECT_ID: ci_walletconnect_project_id
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
+
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+
+  deploy:
+    name: Deploy
+    runs-on: ubuntu-latest
+    needs: verify
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    env:
+      VPS_HOST: ${{ secrets.VPS_HOST }}
+      VPS_PORT: ${{ secrets.VPS_PORT }}
+      VPS_USER: ${{ secrets.VPS_USER }}
+      VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+      DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+      DEPLOY_RESTART_COMMAND: ${{ secrets.DEPLOY_RESTART_COMMAND }}
+    steps:
+      - name: Check deployment secrets
+        id: secrets
+        run: |
+          if [ -z "$VPS_HOST" ] || [ -z "$VPS_USER" ] || [ -z "$VPS_SSH_KEY" ] || [ -z "$DEPLOY_PATH" ] || [ -z "$DEPLOY_RESTART_COMMAND" ]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Deployment skipped. Configure VPS_HOST, VPS_USER, VPS_SSH_KEY, DEPLOY_PATH, and DEPLOY_RESTART_COMMAND repository secrets."
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Deploy over SSH
+        if: steps.secrets.outputs.configured == 'true'
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+
+          SSH_PORT="${VPS_PORT:-22}"
+          ssh-keyscan -p "$SSH_PORT" "$VPS_HOST" >> ~/.ssh/known_hosts
+
+          ssh -i ~/.ssh/deploy_key -p "$SSH_PORT" "$VPS_USER@$VPS_HOST" \
+            "DEPLOY_PATH='$DEPLOY_PATH' DEPLOY_RESTART_COMMAND='$DEPLOY_RESTART_COMMAND' bash -lc 'set -euo pipefail; cd \"\$DEPLOY_PATH\"; git fetch origin main; git reset --hard origin/main; npm ci; npm run build; eval \"\$DEPLOY_RESTART_COMMAND\"'"

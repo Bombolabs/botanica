@@ -1,5 +1,11 @@
 import type { SessionOptions } from "iron-session";
 
+const sessionPassword = process.env.SESSION_PASSWORD;
+
+if (!sessionPassword || sessionPassword.length < 32) {
+  throw new Error("SESSION_PASSWORD must be at least 32 characters long.");
+}
+
 export type SessionData = {
   /** Single-use SIWE nonce, issued before sign-in. */
   nonce?: string;
@@ -9,7 +15,7 @@ export type SessionData = {
 };
 
 export const sessionOptions: SessionOptions = {
-  password: process.env.SESSION_PASSWORD as string,
+  password: sessionPassword,
   cookieName: "botanica_session",
   cookieOptions: {
     httpOnly: true,
