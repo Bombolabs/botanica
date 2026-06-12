@@ -12,6 +12,8 @@ npm run dev
 
 Fill the values in `.env.local` before using wallet login.
 
+Use Node 24 and npm 11 for installs, builds, and deployment.
+
 ## Required Environment
 
 - `NEXT_PUBLIC_WC_PROJECT_ID`: Reown/WalletConnect project id.
